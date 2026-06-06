@@ -147,3 +147,108 @@ The scripts make two separate decisions:
    - Low-quality/restore -> gentler settings using lower outscale
 
 This prevents the user from needing to know CUDA, Vulkan, PyTorch, or model details.
+
+
+## Decision Report and Version Selection
+
+The setup script prints a decision report before installation. It explains:
+
+- Detected OS
+- Detected GPU type and count
+- Backend selection
+- PyTorch version selection
+- GPU ranking
+- Tile selection
+- Content/model selection
+- Installation plan
+
+Example:
+
+```text
+Backend Selection
+Selected backend:
+  pytorch
+
+Why:
+  NVIDIA GPU support was detected through nvidia-smi.
+  PyTorch CUDA is usually the fastest backend for NVIDIA GPUs.
+```
+
+### PyTorch Version
+
+The installer now uses:
+
+```text
+torch       2.2.2
+torchvision 0.17.2
+torchaudio  2.2.2
+```
+
+for CUDA 12.1 and CUDA 11.8 installs.
+
+This replaces the older `torch 2.1.2` pin because some PyTorch CUDA indexes no longer provide that package. The script also explains this decision during installation.
+
+### Verbosity Options
+
+Normal output:
+
+```bash
+./setup_realesrgan_auto.sh --install
+```
+
+Extra details:
+
+```bash
+./setup_realesrgan_auto.sh --install --verbose
+```
+
+Reduced output:
+
+```bash
+./setup_realesrgan_auto.sh --install --quiet
+```
+
+
+## Dependency Error Handling
+
+The setup script includes a dependency-health layer that looks for common Python and GPU setup problems and explains what it is doing.
+
+### Handled Scenarios
+
+| Scenario | What the Script Does |
+|---|---|
+| `torch==2.1.2` not found | Uses `torch==2.2.2`, `torchvision==0.17.2`, `torchaudio==2.2.2` |
+| NumPy 2.x binary warning | Pins `numpy==1.26.4` |
+| OpenCV requires NumPy 2.x | Pins `opencv-python==4.8.1.78` |
+| `tifffile requires numpy>=2.1` | Pins `tifffile==2023.7.10` |
+| `scikit-image` / image stack conflicts | Pins `scikit-image==0.21.0`, `imageio==2.31.6`, `scipy==1.11.4` |
+| `torchvision.transforms.functional_tensor` missing | Patches BasicSR import to use `torchvision.transforms.functional` |
+| Broken Torch install leftovers | Removes invalid `-orch` / `~orch` package folders |
+| CUDA not visible to PyTorch | Prints CUDA diagnostics and detected GPU list |
+| Vulkan unavailable | Prints `vulkaninfo --summary` output for NCNN/Real-CUGAN installs |
+
+### Known-Good Python Package Pins
+
+For the PyTorch RealESRGAN backend, the script uses:
+
+```text
+torch==2.2.2
+torchvision==0.17.2
+torchaudio==2.2.2
+numpy==1.26.4
+opencv-python==4.8.1.78
+scipy==1.11.4
+scikit-image==0.21.0
+imageio==2.31.6
+tifffile==2023.7.10
+```
+
+### Repair Mode
+
+If the environment gets into a bad state, run:
+
+```bash
+./setup_realesrgan_auto.sh --repair
+```
+
+Repair mode removes the Python virtual environment and rebuilds it using the known-good dependency pins.

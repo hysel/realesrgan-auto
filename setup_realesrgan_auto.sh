@@ -19,9 +19,12 @@ INSTALL_DIR="$HOME/realesrgan"
 CONFIG_FILE=""
 ACTION="install"
 BACKEND="auto"
+REQUESTED_BACKEND="auto"
 TORCH_BACKEND="auto"
 REMOVE_PACKAGES=0
 FORCE=0
+VERBOSE=0
+QUIET=0
 
 PYTORCH_REPO="https://github.com/xinntao/Real-ESRGAN.git"
 NCNN_REPO_API="https://api.github.com/repos/xinntao/Real-ESRGAN-ncnn-vulkan/releases/latest"
@@ -55,6 +58,8 @@ Actions:
   --uninstall            Remove install directory
   --remove-packages      With --uninstall, also remove optional packages
   --force                Skip uninstall confirmation
+  --verbose              Show extra decision/debug information
+  --quiet                Reduce console output
 
 Options:
   --backend auto|pytorch|ncnn|realcugan
@@ -89,6 +94,8 @@ while [[ $# -gt 0 ]]; do
     --uninstall) ACTION="uninstall"; shift ;;
     --remove-packages) REMOVE_PACKAGES=1; shift ;;
     --force) FORCE=1; shift ;;
+    --verbose) VERBOSE=1; shift ;;
+    --quiet) QUIET=1; shift ;;
     --backend) BACKEND="${2:-}"; shift 2 ;;
     --torch) TORCH_BACKEND="${2:-}"; shift 2 ;;
     --install-dir) INSTALL_DIR="${2:-}"; shift 2 ;;
@@ -102,6 +109,183 @@ done
 CONFIG_FILE="$INSTALL_DIR/realesrgan_auto.conf"
 
 log() { echo -e "\n==== $* ===="; }
+
+
+explain() {
+  [[ "$QUIET" -eq 1 ]] && return 0
+  echo "$@"
+}
+
+print_section() {
+  [[ "$QUIET" -eq 1 ]] && return 0
+  echo
+  echo "===================================================="
+  echo "$1"
+  echo "===================================================="
+}
+
+print_detected_environment() {
+  print_section "Detected Environment"
+
+  if [[ -f /etc/os-release ]]; then
+    # shellcheck source=/dev/null
+    source /etc/os-release
+    echo "OS:"
+    echo "  ${PRETTY_NAME:-Unknown}"
+  fi
+
+  echo
+  echo "GPU Type:"
+  echo "  $GPU_TYPE"
+  echo
+  echo "GPU Count:"
+  echo "  $GPU_COUNT"
+  echo
+  echo "GPU Info:"
+  if [[ -n "$GPU_INFO" ]]; then
+    echo "$GPU_INFO" | sed 's/^/  /'
+  else
+    echo "  No GPU information available"
+  fi
+}
+
+print_backend_decision() {
+  print_section "Backend Selection"
+
+  echo "Requested backend:"
+  echo "  $REQUESTED_BACKEND"
+  echo
+  echo "Selected backend:"
+  echo "  $BACKEND"
+  echo
+
+  case "$BACKEND" in
+    pytorch)
+      echo "Why:"
+      echo "  NVIDIA GPU support was detected through nvidia-smi."
+      echo "  PyTorch CUDA is usually the fastest and most flexible backend for NVIDIA GPUs."
+      echo "  AMD and Intel backends are skipped because CUDA is preferred when available."
+      ;;
+    ncnn)
+      echo "Why:"
+      echo "  AMD, Intel, or non-CUDA hardware was detected."
+      echo "  NCNN Vulkan is the safest cross-vendor backend for AMD, Intel, and NVIDIA fallback use."
+      ;;
+    realcugan)
+      echo "Why:"
+      echo "  Real-CUGAN was explicitly selected."
+      echo "  This uses the Real-CUGAN NCNN Vulkan backend and is useful for anime sources where RealESRGAN looks too soft, puffy, or smudged."
+      ;;
+  esac
+}
+
+print_torch_decision() {
+  [[ "$BACKEND" == "pytorch" ]] || return 0
+
+  print_section "PyTorch Version Selection"
+
+  echo "Selected Torch backend:"
+  echo "  $TORCH_BACKEND"
+  echo
+  echo "Selected package versions:"
+  echo "  torch       2.2.2"
+  echo "  torchvision 0.17.2"
+  echo "  torchaudio  2.2.2"
+  echo
+  echo "Why:"
+  echo "  The older torch 2.1.2 package is no longer available from the CUDA 12.1 wheel index on some systems."
+  echo "  torch 2.2.2 + torchvision 0.17.2 is available from the cu121 index and keeps compatibility with this RealESRGAN/basicSR setup."
+  echo "  NumPy is pinned to 1.26.4 to avoid NumPy 2.x binary compatibility issues."
+  echo "  OpenCV is pinned to 4.8.1.78 to stay compatible with NumPy 1.26.4."
+}
+
+print_gpu_decision() {
+  [[ "$GPU_TYPE" == "nvidia" ]] || return 0
+
+  print_section "NVIDIA GPU Selection"
+
+  echo "Ranking rule:"
+  echo "  Prefer high-memory datacenter GPUs first, then RTX/Quadro cards, then other NVIDIA GPUs."
+  echo
+  echo "Selected GPUs:"
+  if [[ -n "$SELECTED_GPUS" ]]; then
+    echo "  $SELECTED_GPUS"
+  else
+    echo "  None selected"
+  fi
+  echo
+  echo "Why:"
+  echo "  Matching GPUs with similar performance usually gives better multi-GPU frame processing."
+  echo "  On a mixed V100 + RTX 5000 system, the V100s are preferred first."
+  echo "  You can override this later in upscale_video_auto.sh with --gpus 0,1,2."
+}
+
+print_tile_decision() {
+  print_section "Tile Selection"
+
+  echo "Selected tile:"
+  echo "  $TILE"
+  echo
+  echo "Why:"
+  if [[ "$TILE" == "0" ]]; then
+    echo "  The largest detected NVIDIA GPU has about 30GB+ VRAM."
+    echo "  tile=0 allows full-frame processing and usually gives better performance when memory is sufficient."
+  else
+    echo "  Tile size was selected based on available VRAM."
+    echo "  Smaller GPUs use smaller tiles to reduce out-of-memory risk."
+  fi
+}
+
+print_content_decision() {
+  print_section "Content / Model Selection"
+
+  echo "Content type:"
+  echo "  $CONTENT_TYPE"
+  echo
+  echo "Selected model:"
+  echo "  $MODEL"
+  echo
+  echo "Selected outscale:"
+  echo "  $OUTSCALE"
+  echo
+  echo "Why:"
+  case "$CONTENT_TYPE" in
+    anime|old-anime|cartoon)
+      echo "  realesr-animevideov3 is the safer default for anime and animation video."
+      echo "  It is generally less overprocessed than RealESRGAN_x4plus_anime_6B."
+      ;;
+    live)
+      echo "  RealESRGAN_x4plus is better suited for real-world/live-action footage."
+      ;;
+    low-quality|restore)
+      echo "  Lower outscale is used to avoid exaggerating compression artifacts or noisy details."
+      ;;
+    *)
+      echo "  Defaulting to anime video settings."
+      ;;
+  esac
+}
+
+print_installation_plan() {
+  print_section "Installation Plan"
+
+  echo "Will install/configure:"
+  echo "  OS packages: git, curl, wget, unzip, ffmpeg, python3-venv, vulkan-tools, build tools"
+  echo "  Backend:     $BACKEND"
+  echo "  Install dir: $INSTALL_DIR"
+  echo "  Config file: $CONFIG_FILE"
+
+  if [[ "$BACKEND" == "pytorch" ]]; then
+    echo "  Python venv: $INSTALL_DIR/Real-ESRGAN/venv"
+    echo "  PyTorch:     torch 2.2.2 / torchvision 0.17.2 / torchaudio 2.2.2"
+    echo "  NumPy:       1.26.4"
+    echo "  OpenCV:      4.8.1.78"
+  elif [[ "$BACKEND" == "ncnn" ]]; then
+    echo "  NCNN Vulkan: latest Linux/Ubuntu release from GitHub"
+  elif [[ "$BACKEND" == "realcugan" ]]; then
+    echo "  Real-CUGAN:  latest Linux/Ubuntu NCNN Vulkan release from GitHub"
+  fi
+}
 
 install_os_packages() {
   log "Installing Ubuntu/Debian prerequisites"
@@ -184,7 +368,7 @@ choose_backend() {
       ;;
   esac
 
-  echo "Requested backend: $requested"
+  echo "Requested backend: $REQUESTED_BACKEND"
   echo "Detected GPU type: $GPU_TYPE"
   echo "Selected backend:  $BACKEND"
 }
@@ -335,6 +519,185 @@ latest_release_zip() {
   echo "$url"
 }
 
+
+run_pip_with_log() {
+  local log_file="$1"
+  shift
+  set +e
+  "$@" 2>&1 | tee "$log_file"
+  local rc=${PIPESTATUS[0]}
+  set -e
+  analyze_pip_log "$log_file"
+  return "$rc"
+}
+
+analyze_pip_log() {
+  local log_file="$1"
+  [[ -f "$log_file" ]] || return 0
+
+  if grep -qi "dependency resolver does not currently take into account" "$log_file"; then
+    echo
+    echo "Dependency warning detected."
+    echo "Reason: pip found installed packages with conflicting version requirements."
+    echo "Action: The script will apply known compatibility pins for RealESRGAN."
+  fi
+
+  if grep -qi "requires numpy>=2" "$log_file"; then
+    echo
+    echo "NumPy 2.x dependency conflict detected."
+    echo "Reason: A package wants NumPy 2.x, but this RealESRGAN/PyTorch stack uses NumPy 1.26.4 for compatibility."
+    echo "Action: Pinning known packages to NumPy-1.x-compatible versions."
+    pip install --upgrade --force-reinstall \
+      numpy==1.26.4 \
+      opencv-python==4.8.1.78 \
+      scipy==1.11.4 \
+      scikit-image==0.21.0 \
+      imageio==2.31.6 \
+      tifffile==2023.7.10
+  fi
+
+  if grep -qi "No matching distribution found for torch==2.1.2" "$log_file"; then
+    echo
+    echo "Old Torch pin unavailable."
+    echo "Action: Switching to torch 2.2.2 / torchvision 0.17.2 / torchaudio 2.2.2."
+    TORCH_VERSION="2.2.2"
+    TORCHVISION_VERSION="0.17.2"
+    TORCHAUDIO_VERSION="2.2.2"
+  fi
+
+  if grep -qi "No matching distribution found" "$log_file"; then
+    echo
+    echo "A package version could not be found."
+    echo "Tip: This can happen with unsupported Python versions or unavailable wheel indexes."
+    echo "Recommended Python: 3.10 or 3.11."
+  fi
+
+  if grep -qi "ResolutionImpossible" "$log_file"; then
+    echo
+    echo "pip dependency resolution failed."
+    echo "Action: Try --repair, which recreates the venv and installs the known-good pins."
+  fi
+}
+
+apply_realesrgan_compatibility_pins() {
+  echo
+  echo "Applying RealESRGAN compatibility pins..."
+  echo "Why:"
+  echo "  - NumPy 2.x can break older compiled modules."
+  echo "  - Newer opencv-python releases may require NumPy 2.x."
+  echo "  - Newer tifffile/scikit-image stacks may pull NumPy 2.x."
+  echo "  - These pins keep the RealESRGAN/basicSR/PyTorch stack stable."
+
+  pip install --upgrade --force-reinstall \
+    numpy==1.26.4 \
+    opencv-python==4.8.1.78 \
+    scipy==1.11.4 \
+    scikit-image==0.21.0 \
+    imageio==2.31.6 \
+    tifffile==2023.7.10
+}
+
+patch_basicsr_functional_tensor_if_needed() {
+  echo
+  echo "Checking BasicSR / torchvision functional_tensor compatibility..."
+
+  set +e
+  python - << 'PY'
+try:
+    import torchvision.transforms.functional_tensor
+    print("functional_tensor import OK")
+    raise SystemExit(0)
+except Exception:
+    raise SystemExit(1)
+PY
+  local rc=$?
+  set -e
+
+  if [[ "$rc" -ne 0 ]]; then
+    echo "functional_tensor import is missing."
+    echo "Action: Applying compatibility patch to BasicSR degradations.py if needed."
+
+    local degradations
+    degradations="$(python - << 'PY'
+import site, glob
+paths = []
+for sp in site.getsitepackages():
+    paths += glob.glob(sp + "/basicsr/data/degradations.py")
+print(paths[0] if paths else "")
+PY
+)"
+    if [[ -n "$degradations" && -f "$degradations" ]]; then
+      cp "$degradations" "$degradations.bak" || true
+      sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/g' "$degradations"
+      echo "Patched: $degradations"
+    else
+      echo "WARNING: Could not find BasicSR degradations.py to patch."
+    fi
+  fi
+}
+
+validate_python_environment() {
+  echo
+  echo "Validating Python environment..."
+
+  python - << 'PY'
+import sys
+print("Python:", sys.version)
+if sys.version_info < (3,10):
+    raise SystemExit("ERROR: Python 3.10+ is recommended.")
+PY
+
+  python - << 'PY'
+import numpy, cv2, torch
+print("numpy:", numpy.__version__)
+print("opencv:", cv2.__version__)
+print("torch:", torch.__version__)
+print("torch cuda available:", torch.cuda.is_available())
+print("torch cuda version:", torch.version.cuda)
+if torch.cuda.is_available():
+    for i in range(torch.cuda.device_count()):
+        print(i, torch.cuda.get_device_name(i))
+PY
+}
+
+diagnose_common_runtime_errors() {
+  echo
+  echo "Runtime diagnostic checks..."
+
+  set +e
+  python - << 'PY'
+errors = []
+
+try:
+    import torch
+except Exception as e:
+    errors.append(("torch-import", str(e)))
+
+try:
+    import torchvision
+except Exception as e:
+    errors.append(("torchvision-import", str(e)))
+
+try:
+    import cv2
+except Exception as e:
+    errors.append(("opencv-import", str(e)))
+
+try:
+    import basicsr
+except Exception as e:
+    errors.append(("basicsr-import", str(e)))
+
+for name, msg in errors:
+    print(f"CHECK_FAILED:{name}:{msg}")
+
+if not errors:
+    print("Core Python imports OK")
+PY
+  set -e
+}
+
+
 install_pytorch_realesrgan() {
   log "Installing PyTorch Real-ESRGAN"
   mkdir -p "$INSTALL_DIR"
@@ -351,15 +714,18 @@ install_pytorch_realesrgan() {
   source venv/bin/activate
   pip install --upgrade pip setuptools wheel
 
+  echo "Installing PyTorch packages selected by the decision engine..."
+  echo "Reason: torch 2.2.2 is available on the cu121/cu118 indexes where torch 2.1.2 may not be."
+
   case "$TORCH_BACKEND" in
     cu121)
-      pip install torch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cu121
+      run_pip_with_log /tmp/realesrgan_torch_install.log pip install torch==2.2.2 torchvision==0.17.2 torchaudio==2.2.2 --index-url https://download.pytorch.org/whl/cu121
       ;;
     cu118)
-      pip install torch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cu118
+      run_pip_with_log /tmp/realesrgan_torch_install.log pip install torch==2.2.2 torchvision==0.17.2 torchaudio==2.2.2 --index-url https://download.pytorch.org/whl/cu118
       ;;
     cpu)
-      pip install torch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2
+      run_pip_with_log /tmp/realesrgan_torch_install.log pip install torch==2.2.2 torchvision==0.17.2 torchaudio==2.2.2
       ;;
     *)
       echo "ERROR: Unknown --torch value: $TORCH_BACKEND"
@@ -367,24 +733,20 @@ install_pytorch_realesrgan() {
       ;;
   esac
 
-  pip install -r requirements.txt
-  pip install -e .
+  run_pip_with_log /tmp/realesrgan_requirements_install.log pip install -r requirements.txt
+  run_pip_with_log /tmp/realesrgan_editable_install.log pip install -e .
 
   # Known compatibility pins for this Real-ESRGAN/basicSR generation.
-  pip uninstall -y numpy opencv-python || true
-  pip install numpy==1.26.4 opencv-python==4.8.1.78
+  pip uninstall -y numpy opencv-python scipy scikit-image imageio tifffile || true
+  apply_realesrgan_compatibility_pins
+  patch_basicsr_functional_tensor_if_needed
+  diagnose_common_runtime_errors
 
   local site_packages
   site_packages="$(python -c "import site; print(site.getsitepackages()[0])")"
   rm -rf "$site_packages"/-orch* "$site_packages"/~orch* || true
 
-  python - << 'PY'
-import torch
-print("CUDA available:", torch.cuda.is_available())
-print("GPU count:", torch.cuda.device_count())
-for i in range(torch.cuda.device_count()):
-    print(i, torch.cuda.get_device_name(i))
-PY
+  validate_python_environment
 }
 
 install_ncnn_realesrgan() {
@@ -520,6 +882,14 @@ do_install() {
   choose_tile
   content_wizard
   apply_content_defaults
+
+  print_detected_environment
+  print_backend_decision
+  print_torch_decision
+  print_gpu_decision
+  print_tile_decision
+  print_content_decision
+  print_installation_plan
 
   case "$BACKEND" in
     pytorch) install_pytorch_realesrgan ;;
