@@ -1,0 +1,20 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+
+# Video processing
+video_upscale/
+input_frames/
+output_frames/
+*.mka
+
+# Generated configs
+realesrgan_auto.conf
+
+# OS
+.DS_Store
+Thumbs.db
