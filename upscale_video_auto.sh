@@ -52,7 +52,8 @@ Options:
   --backend auto|pytorch|ncnn|realcugan
   --gpus 0,1
   --gpu-count N
-  --content anime|live
+  --interactive
+  --content anime|old-anime|cartoon|live|low-quality|restore
   --model auto|realesr-animevideov3|RealESRGAN_x4plus_anime_6B|RealESRGAN_x4plus
   --outscale N
   --tile N
@@ -94,6 +95,7 @@ while [[ $# -gt 0 ]]; do
     --delete-temp) DELETE_TEMP=1; shift ;;
     --resume) RESUME=1; shift ;;
     --force) FORCE=1; shift ;;
+    --interactive) INTERACTIVE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
@@ -155,15 +157,64 @@ resolve_backend_auto() {
 
 resolve_backend_auto
 
-if [[ "$MODEL" == "auto" ]]; then
+
+content_wizard() {
+  [[ "$INTERACTIVE" -eq 1 ]] || return 0
+
+  echo
+  echo "Select content type:"
+  echo "  1) Anime / animation video"
+  echo "  2) Old anime / softer source"
+  echo "  3) Cartoon / western animation"
+  echo "  4) Live action / real video"
+  echo "  5) Low-quality / noisy source"
+  echo "  6) Restore only / avoid heavy upscale"
+  read -r -p "Choose [1-6] default 1: " choice
+
+  case "${choice:-1}" in
+    1) CONTENT="anime" ;;
+    2) CONTENT="old-anime" ;;
+    3) CONTENT="cartoon" ;;
+    4) CONTENT="live" ;;
+    5) CONTENT="low-quality" ;;
+    6) CONTENT="restore" ;;
+    *) CONTENT="anime" ;;
+  esac
+}
+
+apply_content_defaults() {
+  if [[ "$MODEL" == "auto" ]]; then
+    case "$CONTENT" in
+      anime|old-anime|cartoon)
+        MODEL="realesr-animevideov3"
+        ;;
+      live)
+        MODEL="RealESRGAN_x4plus"
+        ;;
+      low-quality|restore)
+        MODEL="realesr-animevideov3"
+        ;;
+      *)
+        MODEL="realesr-animevideov3"
+        ;;
+    esac
+  fi
+
+  if [[ -z "$OUTSCALE" ]]; then
+    case "$CONTENT" in
+      low-quality|restore) OUTSCALE=1 ;;
+      *) OUTSCALE=2 ;;
+    esac
+  fi
+
   if [[ "$BACKEND" == "realcugan" ]]; then
     MODEL="realcugan"
-  elif [[ "$CONTENT" == "live" ]]; then
-    MODEL="RealESRGAN_x4plus"
-  else
-    MODEL="realesr-animevideov3"
+    [[ -z "$OUTSCALE" || "$OUTSCALE" -lt 2 ]] && OUTSCALE=2
   fi
-fi
+}
+
+content_wizard
+apply_content_defaults
 
 if [[ -z "$OUTPUT" ]]; then
   stem="$(basename "$INPUT")"

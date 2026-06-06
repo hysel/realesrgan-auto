@@ -37,6 +37,8 @@ OUTSCALE=2
 ENCODER="hevc_nvenc"
 CQ=18
 CONTAINER="mkv"
+CONTENT_TYPE="anime"
+INTERACTIVE=0
 NCNN_BIN=""
 REALCUGAN_BIN=""
 
@@ -58,6 +60,8 @@ Options:
   --backend auto|pytorch|ncnn|realcugan
   --torch auto|cu121|cu118|cpu
   --install-dir PATH
+  --interactive          Ask questions and select recommended defaults
+  --content TYPE         anime|cartoon|live|old-anime|low-quality|restore
   -h, --help
 
 Decision table:
@@ -88,6 +92,8 @@ while [[ $# -gt 0 ]]; do
     --backend) BACKEND="${2:-}"; shift 2 ;;
     --torch) TORCH_BACKEND="${2:-}"; shift 2 ;;
     --install-dir) INSTALL_DIR="${2:-}"; shift 2 ;;
+    --interactive) INTERACTIVE=1; shift ;;
+    --content) CONTENT_TYPE="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
@@ -233,6 +239,73 @@ rank_nvidia_gpus() {
   echo "Selected NVIDIA GPUs: $SELECTED_GPUS"
 }
 
+
+content_wizard() {
+  [[ "$INTERACTIVE" -eq 1 ]] || return 0
+
+  echo
+  echo "Select content type:"
+  echo "  1) Anime / animation video"
+  echo "  2) Old anime / softer source"
+  echo "  3) Cartoon / western animation"
+  echo "  4) Live action / real video"
+  echo "  5) Low-quality / noisy source"
+  echo "  6) Restore only / avoid heavy upscale"
+  read -r -p "Choose [1-6] default 1: " choice
+
+  case "${choice:-1}" in
+    1) CONTENT_TYPE="anime" ;;
+    2) CONTENT_TYPE="old-anime" ;;
+    3) CONTENT_TYPE="cartoon" ;;
+    4) CONTENT_TYPE="live" ;;
+    5) CONTENT_TYPE="low-quality" ;;
+    6) CONTENT_TYPE="restore" ;;
+    *) CONTENT_TYPE="anime" ;;
+  esac
+}
+
+apply_content_defaults() {
+  case "$CONTENT_TYPE" in
+    anime)
+      MODEL="realesr-animevideov3"
+      OUTSCALE=2
+      ;;
+    old-anime)
+      MODEL="realesr-animevideov3"
+      OUTSCALE=2
+      ;;
+    cartoon)
+      MODEL="realesr-animevideov3"
+      OUTSCALE=2
+      ;;
+    live)
+      MODEL="RealESRGAN_x4plus"
+      OUTSCALE=2
+      ;;
+    low-quality)
+      MODEL="realesr-animevideov3"
+      OUTSCALE=1
+      ;;
+    restore)
+      MODEL="realesr-animevideov3"
+      OUTSCALE=1
+      ;;
+    *)
+      MODEL="realesr-animevideov3"
+      OUTSCALE=2
+      ;;
+  esac
+
+  if [[ "$BACKEND" == "realcugan" ]]; then
+    MODEL="realcugan"
+    [[ "$OUTSCALE" -lt 2 ]] && OUTSCALE=2
+  fi
+
+  echo "Content type: $CONTENT_TYPE"
+  echo "Recommended model: $MODEL"
+  echo "Recommended outscale: $OUTSCALE"
+}
+
 choose_tile() {
   TILE=1200
   if [[ "$GPU_TYPE" == "nvidia" && -n "$GPU_INFO" ]]; then
@@ -368,6 +441,7 @@ GPU_INFO="$(echo "$GPU_INFO" | tr '\n' ';')"
 BACKEND="$BACKEND"
 TORCH_BACKEND="$TORCH_BACKEND"
 SELECTED_GPUS="$SELECTED_GPUS"
+CONTENT_TYPE="$CONTENT_TYPE"
 MODEL="$MODEL"
 OUTSCALE="$OUTSCALE"
 TILE="$TILE"
@@ -392,7 +466,9 @@ print_summary() {
   echo "Backend:       $BACKEND"
   echo "Torch:         $TORCH_BACKEND"
   echo "Selected GPUs: $SELECTED_GPUS"
+  echo "Content type:  $CONTENT_TYPE"
   echo "Model:         $MODEL"
+  echo "Outscale:      $OUTSCALE"
   echo "Tile:          $TILE"
   echo "Config:        $CONFIG_FILE"
 }
@@ -442,6 +518,8 @@ do_install() {
   choose_torch_backend
   rank_nvidia_gpus
   choose_tile
+  content_wizard
+  apply_content_defaults
 
   case "$BACKEND" in
     pytorch) install_pytorch_realesrgan ;;
